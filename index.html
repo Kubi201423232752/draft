@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MediaPipe 智能手势绘图 - 锚点缩放版</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+     
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #121212;
+            color: white;
+            font-family: 'Segoe UI', sans-serif;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+ 
+        .container {
+            position: relative;
+            width: 100%;
+            max-width: 1600px;
+            aspect-ratio: 16/9;
+            background: #000;
+            border-radius: 12px;
+            box-shadow: 0 0 30px rgba(0,0,0,0.8);
+            overflow: hidden;
+        }
+ 
+        .input_video { display: none; }
+ 
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+ 
+        #output_canvas { 
+            z-index: 1; 
+            transform: scaleX(-1);
+        } 
+         
+        #drawing_canvas { z-index: 2; } 
+        #ui_canvas { z-index: 3; pointer-events: none; }
+ 
+        #status {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            background: rgba(20, 20, 20, 0.85);
+            backdrop-filter: blur(8px);
+            padding: 10px 24px;
+            border-radius: 30px;
+            font-size: 18px;
+            font-weight: 500;
+            pointer-events: none;
+            border: 1px solid rgba(255,255,255,0.15);
+            white-space: nowrap;
+            transition: all 0.2s;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+ 
+        #settings-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 260px;
+            background: rgba(30, 30, 30, 0.9); 
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px;
+            padding: 20px;
+            z-index: 20;
+            display: block; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+            color: #eee;
+        }
+ 
+        .panel-section { margin-bottom: 15px; }
+         
+        .panel-label {
+            font-size: 12px;
+            color: #aaa;
+            margin-bottom: 8px;
+            display: block;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: bold;
+        }
+ 
+        .tool-row { display: flex; gap: 10px; }
+ 
+        .tool-btn {
+            flex: 1;
+            padding: 10px;
+            text-align: center;
+            border: 1px solid #555;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.05);
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+ 
+        .tool-btn.active {
+            background-color: #007bff;
+            border-color: #007bff;
+            color: white;
+            box-shadow: 0 4px 12px rgba(0, 123, 255, 0.3);
+        }
+ 
+        .color-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            justify-items: center;
+        }
+ 
+        .color-opt {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .color-opt.active {
+            border-color: white;
+            transform: scale(1.2);
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+ 
+        .size-row {
+            display: flex;
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+            padding: 4px;
+        }
+ 
+        .size-opt {
+            flex: 1;
+            text-align: center;
+            padding: 6px 0;
+            border-radius: 6px;
+            font-size: 12px;
+            color: #888;
+            cursor: pointer;
+        }
+        .size-opt.active {
+            background: #555;
+            color: white;
+            font-weight: bold;
+        }
+ 
+        .progress-ring {
+            position: absolute;
+            pointer-events: none;
+            z-index: 30;
+            display: none;
+        }
+ 
+        .loading-cover {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #000;
+            z-index: 100;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+         
+        .spinner {
+            width: 40px; height: 40px;
+            border: 4px solid #333;
+            border-top: 4px solid #007bff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+ 
+        /* 帮助提示气泡 */
+        .gesture-hint {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 20px;
+            z-index: 10;
+        }
+        .hint-item {
+            background: rgba(0,0,0,0.6);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            color: #ddd;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+    </style>
+</head>
+<body>
+ 
+<div class="container">
+    <video class="input_video"></video>
+    <canvas id="output_canvas"></canvas>
+    <canvas id="drawing_canvas"></canvas>
+    <canvas id="ui_canvas"></canvas>
+ 
+    <div id="status">系统初始化中...</div>
+ 
+    <div class="loading-cover" id="loading">
+        <div class="spinner"></div>
+        <div style="font-size: 16px; color: #888;">正在启动摄像头...</div>
+    </div>
+ 
+    <!-- 底部操作提示 -->
+    <div class="gesture-hint">
+        <div class="hint-item"><span>✋</span> 张手移动&缩放</div>
+        <div class="hint-item"><span>👌</span> 捏合写字</div>
+        <div class="hint-item"><span>✌️</span> V字清屏</div>
+    </div>
+ 
+    <!-- UI 面板 -->
+    <div id="settings-panel">
+        <div class="panel-section">
+            <span class="panel-label">工具</span>
+            <div class="tool-row">
+                <div class="tool-btn active" id="btn-pen" data-type="tool" data-val="pen">✏️ 画笔</div>
+                <div class="tool-btn" id="btn-eraser" data-type="tool" data-val="eraser">🧹 橡皮</div>
+            </div>
+        </div>
+ 
+        <div class="panel-section">
+            <span class="panel-label">颜色</span>
+            <div class="color-grid">
+                <div class="color-opt active" style="background: #ff3b30;" data-type="color" data-val="#ff3b30"></div>
+                <div class="color-opt" style="background: #34c759;" data-type="color" data-val="#34c759"></div>
+                <div class="color-opt" style="background: #007aff;" data-type="color" data-val="#007aff"></div>
+                <div class="color-opt" style="background: #ffcc00;" data-type="color" data-val="#ffcc00"></div>
+                <div class="color-opt" style="background: #ffffff;" data-type="color" data-val="#ffffff"></div>
+                <div class="color-opt" style="background: #af52de;" data-type="color" data-val="#af52de"></div>
+                <div class="color-opt" style="background: #5856d6;" data-type="color" data-val="#5856d6"></div>
+                <div class="color-opt" style="background: #ff9500;" data-type="color" data-val="#ff9500"></div>
+            </div>
+        </div>
+ 
+        <div class="panel-section">
+            <span class="panel-label">粗细</span>
+            <div class="size-row">
+                <div class="size-opt active" data-type="size" data-val="3">细</div>
+                <div class="size-opt" data-type="size" data-val="8">中</div>
+                <div class="size-opt" data-type="size" data-val="16">粗</div>
+                <div class="size-opt" data-type="size" data-val="30">特</div>
+            </div>
+        </div>
+    </div>
+ 
+    <!-- 悬停选择进度圈 -->
+    <svg class="progress-ring" width="80" height="80">
+        <circle stroke="rgba(255,255,255,0.2)" stroke-width="6" fill="transparent" r="30" cx="40" cy="40"/>
+        <circle id="progress-circle" stroke="#007aff" stroke-width="6" fill="transparent" r="30" cx="40" cy="40"
+                stroke-dasharray="188" stroke-dashoffset="188" style="transition: stroke-dashoffset 0.1s linear"/>
+    </svg>
+</div>
+ 
+<script>
+    // --- 配置 ---
+    const CONFIG = {
+        width: 1280,
+        height: 720,
+        pinchStartThreshold: 0.05,
+        pinchStopThreshold: 0.08,
+        pinchDebounceFrames: 3,
+        hoverTime: 600,
+        cursorSmooth: 0.5,
+        // 缩放平滑参数
+        zoomSmooth: 0.15, 
+        zoomSensitivity: 2.2,
+        // 漫游平滑参数
+        panSmooth: 0.3
+    };
+ 
+    // --- 初始化 DOM ---
+    const videoElement = document.querySelector('.input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const drawCanvas = document.getElementById('drawing_canvas');
+    const uiCanvas = document.getElementById('ui_canvas');
+    const statusText = document.getElementById('status');
+    const loadingCover = document.getElementById('loading');
+    const progressRing = document.querySelector('.progress-ring');
+    const progressCircle = document.getElementById('progress-circle');
+ 
+    const canvasCtx = canvasElement.getContext('2d');
+    const drawCtx = drawCanvas.getContext('2d');
+    const uiCtx = uiCanvas.getContext('2d');
+ 
+    [canvasElement, drawCanvas, uiCanvas].forEach(c => {
+        c.width = CONFIG.width;
+        c.height = CONFIG.height;
+    });
+ 
+    // --- 状态管理 ---
+    let state = {
+        tool: 'pen',
+        color: '#ff3b30',
+        lineWidth: 3,
+        lines: [],
+        currentLine: null,
+        particles: [],
+        isSnowing: false,
+         
+        // 核心变换状态
+        globalScale: 1,
+         
+        // 移动/缩放状态
+        isPanning: false,
+        lastPanPoint: {x: 0, y: 0},
+        panStartHandSize: 0, 
+        panStartScale: 1,
+         
+        // 平滑用的缓冲变量
+        smoothHandX: 0,
+        smoothHandY: 0,
+        smoothHandSize: 0,
+         
+        // 手势状态
+        isPinchingRaw: false,
+        isPinchingStable: false,
+        pinchFrameCounter: 0,
+         
+        cursorX: 0,
+        cursorY: 0
+    };
+ 
+    let hoverTarget = null;
+    let hoverStartTime = 0;
+ 
+    // --- 坐标转换 ---
+    function toScreen(landmark) {
+        return {
+            x: (1 - landmark.x) * CONFIG.width, 
+            y: landmark.y * CONFIG.height
+        };
+    }
+ 
+    // --- 碰撞检测 ---
+    function checkCollision(x, y, element) {
+        const rect = element.getBoundingClientRect();
+        const containerRect = document.querySelector('.container').getBoundingClientRect();
+        const scaleX = containerRect.width / CONFIG.width;
+        const scaleY = containerRect.height / CONFIG.height;
+        const screenX = x * scaleX;
+        const screenY = y * scaleY;
+        const elLeft = rect.left - containerRect.left;
+        const elTop = rect.top - containerRect.top;
+        const padding = 20;
+         
+        return (
+            screenX >= elLeft - padding && 
+            screenX <= elLeft + rect.width + padding && 
+            screenY >= elTop - padding && 
+            screenY <= elTop + rect.height + padding
+        );
+    }
+ 
+    // --- 绘制曲线 ---
+    function drawSmoothLine(ctx, points, color, width) {
+        if (points.length < 2) return;
+        ctx.beginPath();
+        ctx.lineWidth = width * state.globalScale; 
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = color;
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length - 2; i++) {
+            const xc = (points[i].x + points[i + 1].x) / 2;
+            const yc = (points[i].y + points[i + 1].y) / 2;
+            ctx.quadraticCurveTo(points[i].x, points[i].y, xc, yc);
+        }
+        if (points.length > 2) {
+            ctx.quadraticCurveTo(points[points.length - 2].x, points[points.length - 2].y, points[points.length - 1].x, points[points.length - 1].y);
+        } else {
+            ctx.lineTo(points[1].x, points[1].y);
+        }
+        ctx.stroke();
+    }
+ 
+    // --- 距离计算 ---
+    function distance(p1, p2) {
+        return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+    }
+ 
+    // --- 手掌大小计算 (用于深度估算) ---
+    function calculateHandSize(landmarks) {
+        const p1 = toScreen(landmarks[0]);
+        const p2 = toScreen(landmarks[9]);
+        return distance(p1, p2);
+    }
+ 
+    // --- 手势识别核心逻辑 ---
+    function processHand(landmarks) {
+        const thumb = landmarks[4];
+        const index = landmarks[8];
+        const middle = landmarks[12];
+        const ring = landmarks[16];
+        const pinky = landmarks[20];
+        const wrist = landmarks[0];
+ 
+        const handSize = distance(wrist, index);
+ 
+        // 1. 写字捏合 (Pinch)
+        const distThumbIndex = distance(thumb, index);
+        const normalizedPinch = distThumbIndex / (handSize || 1);
+         
+        if (state.isPinchingRaw) {
+            if (normalizedPinch > 0.25) state.isPinchingRaw = false;
+        } else {
+            if (normalizedPinch < 0.12) state.isPinchingRaw = true;
+        }
+         
+        if (state.isPinchingRaw !== state.isPinchingStable) {
+            state.pinchFrameCounter++;
+            if (state.pinchFrameCounter >= CONFIG.pinchDebounceFrames) {
+                state.isPinchingStable = state.isPinchingRaw;
+                state.pinchFrameCounter = 0;
+            }
+        } else {
+            state.pinchFrameCounter = 0;
+        }
+ 
+        // 2. 握拳 (Fist) - 忽略
+        const isFist = 
+            distance(index, wrist) < handSize * 0.6 &&
+            distance(middle, wrist) < handSize * 0.6 &&
+            distance(ring, wrist) < handSize * 0.6 &&
+            distance(pinky, wrist) < handSize * 0.6;
+ 
+        // 3. 张手 (Open Hand) - 移动 & 缩放
+        const isOpen = 
+            !isFist &&
+            distance(index, wrist) > handSize * 0.9 &&
+            distance(middle, wrist) > handSize * 0.9 &&
+            distance(ring, wrist) > handSize * 0.9 &&
+            distance(pinky, wrist) > handSize * 0.9 &&
+            distance(index, middle) > 0.1 && 
+            !state.isPinchingStable;
+ 
+        // 4. 食指指点 (Select)
+        const isPointing = 
+            !isFist &&
+            distance(index, wrist) > handSize * 0.8 &&
+            distance(middle, wrist) < handSize * 0.7 &&
+            distance(ring, wrist) < handSize * 0.7 &&
+            distance(pinky, wrist) < handSize * 0.7;
+ 
+        // 5. V字 (Clear)
+        const isPeace = 
+            !isFist &&
+            distance(index, wrist) > handSize * 0.8 &&
+            distance(middle, wrist) > handSize * 0.8 &&
+            distance(ring, wrist) < handSize * 0.6 &&
+            distance(pinky, wrist) < handSize * 0.6 &&
+            distance(index, middle) > 0.05;
+ 
+        return { isPinching: state.isPinchingStable, isFist, isOpen, isPointing, isPeace };
+    }
+ 
+    // --- 主循环 ---
+    function onResults(results) {
+        loadingCover.style.display = 'none';
+         
+        canvasCtx.save();
+        canvasCtx.clearRect(0, 0, CONFIG.width, CONFIG.height);
+        canvasCtx.drawImage(results.image, 0, 0, CONFIG.width, CONFIG.height);
+        canvasCtx.restore();
+ 
+        uiCtx.clearRect(0, 0, CONFIG.width, CONFIG.height);
+ 
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            const landmarks = results.multiHandLandmarks[0];
+            const gestures = processHand(landmarks);
+             
+            const rawIndex = toScreen(landmarks[8]);
+            const rawThumb = toScreen(landmarks[4]);
+            const rawCenter = toScreen(landmarks[9]); 
+             
+            // 光标平滑
+            state.cursorX = state.cursorX * CONFIG.cursorSmooth + rawIndex.x * (1 - CONFIG.cursorSmooth);
+            state.cursorY = state.cursorY * CONFIG.cursorSmooth + rawIndex.y * (1 - CONFIG.cursorSmooth);
+ 
+            // --- 交互状态机 ---
+ 
+            // 1. V字 -> 清除
+            if (gestures.isPeace) {
+                statusText.innerText = "✨ 正在清除画布...";
+                triggerSnowEffect();
+                state.isPanning = false;
+                endCurrentLine();
+                resetHover();
+            }
+            // 2. 写字 (Pinch)
+            else if (gestures.isPinching) {
+                statusText.innerText = state.tool === 'eraser' ? "🧹 橡皮擦模式" : "✏️ 书写模式";
+                const penX = (rawIndex.x + rawThumb.x) / 2;
+                const penY = (rawIndex.y + rawThumb.y) / 2;
+                 
+                if (!state.currentLine) {
+                    addPointToLine(penX, penY, true);
+                } else {
+                    addPointToLine(penX, penY, false);
+                }
+                drawCursor(uiCtx, penX, penY, 'write');
+                 
+                state.isPanning = false;
+                resetHover();
+            }
+            // 3. 张手 -> 3D 漫游 (平移 + 推进缩放)
+            else if (gestures.isOpen) {
+                const currentHandSize = calculateHandSize(landmarks);
+ 
+                if (!state.isPanning) {
+                    // 初始化平滑值
+                    state.smoothHandX = rawCenter.x;
+                    state.smoothHandY = rawCenter.y;
+                    state.smoothHandSize = currentHandSize;
+ 
+                    state.isPanning = true;
+                    state.lastPanPoint = {x: rawCenter.x, y: rawCenter.y};
+                    state.panStartHandSize = currentHandSize;
+                    state.panStartScale = state.globalScale;
+                } else {
+                    // 对输入数据进行平滑处理，防止抖动
+                    state.smoothHandX = state.smoothHandX * (1 - CONFIG.panSmooth) + rawCenter.x * CONFIG.panSmooth;
+                    state.smoothHandY = state.smoothHandY * (1 - CONFIG.panSmooth) + rawCenter.y * CONFIG.panSmooth;
+                    state.smoothHandSize = state.smoothHandSize * (1 - CONFIG.zoomSmooth) + currentHandSize * CONFIG.zoomSmooth;
+ 
+                    // A. 处理平移 (Pan)
+                    // 计算平滑后的位移
+                    const deltaX = state.smoothHandX - state.lastPanPoint.x;
+                    const deltaY = state.smoothHandY - state.lastPanPoint.y;
+                     
+                    panDrawing(deltaX, deltaY);
+                     
+                    // 更新上一帧位置为当前平滑位置
+                    state.lastPanPoint = {x: state.smoothHandX, y: state.smoothHandY};
+ 
+                    // B. 处理缩放 (Zoom)
+                    // 使用锚点缩放：缩放中心 = 当前手掌位置 (state.smoothHandX, Y)
+                    const sizeRatio = state.smoothHandSize / state.panStartHandSize;
+                    const amplifiedRatio = Math.pow(sizeRatio, CONFIG.zoomSensitivity);
+                    const targetScale = state.panStartScale * amplifiedRatio;
+                     
+                    const clampedTarget = Math.max(0.2, Math.min(targetScale, 10.0));
+ 
+                    // 平滑过渡 scale
+                    const newScale = state.globalScale + (clampedTarget - state.globalScale) * 0.2;
+                     
+                    // 关键优化：以当前手的位置为中心进行缩放，而不是屏幕中心
+                    updateScale(newScale, {x: state.smoothHandX, y: state.smoothHandY});
+                     
+                    statusText.innerText = `✋ 漫游 | 缩放: ${newScale.toFixed(1)}x`;
+                }
+                 
+                // 视觉反馈：锚点
+                uiCtx.beginPath();
+                uiCtx.arc(state.smoothHandX, state.smoothHandY, 15, 0, Math.PI * 2);
+                uiCtx.strokeStyle = '#00ff00';
+                uiCtx.lineWidth = 2;
+                uiCtx.stroke();
+                 
+                // 视觉反馈：原始手位置（虚线）
+                uiCtx.beginPath();
+                uiCtx.arc(rawCenter.x, rawCenter.y, 10, 0, Math.PI * 2);
+                uiCtx.fillStyle = 'rgba(255,255,255,0.3)';
+                uiCtx.fill();
+                 
+                endCurrentLine();
+                resetHover();
+            }
+            // 4. 悬停/选择
+            else {
+                state.isPanning = false;
+                 
+                if (gestures.isPointing) {
+                    statusText.innerText = "👆 菜单选择模式";
+                    drawCursor(uiCtx, state.cursorX, state.cursorY, 'menu');
+                    handleMenuInteraction(state.cursorX, state.cursorY);
+                } else {
+                    statusText.innerText = "👐 张手漫游(锚点缩放) | 👌 捏合写字";
+                    drawCursor(uiCtx, state.cursorX, state.cursorY, 'hover');
+                    resetHover();
+                }
+                endCurrentLine();
+            }
+ 
+        } else {
+            statusText.innerText = "请将手放入摄像头范围";
+            state.isPanning = false;
+            endCurrentLine();
+            resetHover();
+        }
+ 
+        renderDrawing();
+        if (state.isSnowing) updateParticles();
+    }
+ 
+    // --- 绘图操作函数 ---
+ 
+    function addPointToLine(x, y, isStart) {
+        if (isStart || !state.currentLine) {
+            state.currentLine = {
+                points: [{x, y}],
+                color: state.color,
+                width: state.lineWidth,
+                isEraser: state.tool === 'eraser'
+            };
+            state.lines.push(state.currentLine);
+        } else {
+            const points = state.currentLine.points;
+            const lastPoint = points[points.length - 1];
+            if (distance({x, y}, lastPoint) > 3) {
+                const smoothFactor = 0.6;
+                const smoothX = lastPoint.x * (1 - smoothFactor) + x * smoothFactor;
+                const smoothY = lastPoint.y * (1 - smoothFactor) + y * smoothFactor;
+                points.push({x: smoothX, y: smoothY});
+            }
+        }
+    }
+ 
+    function endCurrentLine() {
+        state.currentLine = null;
+    }
+ 
+    function renderDrawing() {
+        drawCtx.clearRect(0, 0, CONFIG.width, CONFIG.height);
+        state.lines.forEach(line => {
+            if (line.points.length < 2) return;
+            if (line.isEraser) {
+                drawCtx.globalCompositeOperation = 'destination-out';
+                drawSmoothLine(drawCtx, line.points, 'rgba(0,0,0,1)', line.width);
+            } else {
+                drawCtx.globalCompositeOperation = 'source-over';
+                drawSmoothLine(drawCtx, line.points, line.color, line.width);
+            }
+        });
+        drawCtx.globalCompositeOperation = 'source-over';
+    }
+ 
+    // --- 画布变换函数 ---
+ 
+    function updateScale(newScale, center) {
+        // 计算缩放比率差异
+        const ratio = newScale / state.globalScale;
+        state.globalScale = newScale;
+         
+        state.lines.forEach(line => {
+            line.points.forEach(p => {
+                // 以 center 为锚点进行缩放
+                // 新坐标 = 中心点 + (旧坐标 - 中心点) * 缩放比
+                p.x = center.x + (p.x - center.x) * ratio;
+                p.y = center.y + (p.y - center.y) * ratio;
+            });
+            line.width *= ratio;
+        });
+    }
+ 
+    function panDrawing(dx, dy) {
+        state.lines.forEach(line => {
+            line.points.forEach(p => {
+                p.x += dx;
+                p.y += dy;
+            });
+        });
+    }
+ 
+    // --- 辅助绘制 ---
+ 
+    function drawCursor(ctx, x, y, type) {
+        ctx.beginPath();
+        if (type === 'menu') {
+            ctx.arc(x, y, 6, 0, Math.PI * 2);
+            ctx.fillStyle = '#007bff';
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.fill();
+            ctx.stroke();
+        } else if (type === 'write') {
+            ctx.arc(x, y, state.lineWidth / 2, 0, Math.PI * 2);
+            ctx.fillStyle = state.tool === 'eraser' ? 'white' : state.color;
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1;
+            ctx.fill();
+            ctx.stroke();
+        } else {
+            ctx.arc(x, y, 4, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.fill();
+        }
+    }
+ 
+    // --- 菜单交互 ---
+ 
+    function handleMenuInteraction(x, y) {
+        const buttons = document.querySelectorAll('.tool-btn, .color-opt, .size-opt');
+        let hit = null;
+        buttons.forEach(btn => {
+            if (checkCollision(x, y, btn)) hit = btn;
+        });
+ 
+        if (hit) {
+            progressRing.style.display = 'block';
+            progressRing.style.left = (x - 40) + 'px';
+            progressRing.style.top = (y - 40) + 'px';
+ 
+            if (hoverTarget !== hit) {
+                hoverTarget = hit;
+                hoverStartTime = Date.now();
+                progressCircle.style.strokeDashoffset = 188;
+            } else {
+                const elapsed = Date.now() - hoverStartTime;
+                const progress = Math.min(elapsed / CONFIG.hoverTime, 1);
+                progressCircle.style.strokeDashoffset = 188 - (188 * progress);
+                if (elapsed >= CONFIG.hoverTime) {
+                    activateButton(hit);
+                    resetHover();
+                }
+            }
+        } else {
+            resetHover();
+        }
+    }
+ 
+    function resetHover() {
+        hoverTarget = null;
+        progressRing.style.display = 'none';
+    }
+ 
+    function activateButton(btn) {
+        const type = btn.dataset.type;
+        const val = btn.dataset.val;
+        if (type === 'tool') {
+            document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+            state.tool = val;
+        } else if (type === 'color') {
+            document.querySelectorAll('.color-opt').forEach(b => b.classList.remove('active'));
+            state.color = val;
+            state.tool = 'pen';
+            document.querySelector('#btn-pen').classList.add('active');
+            document.querySelector('#btn-eraser').classList.remove('active');
+        } else if (type === 'size') {
+            document.querySelectorAll('.size-opt').forEach(b => b.classList.remove('active'));
+            state.lineWidth = parseInt(val);
+        }
+        btn.classList.add('active');
+        btn.style.transform = "scale(0.9)";
+        setTimeout(() => btn.style.transform = "", 150);
+    }
+ 
+    // --- 雪花特效 ---
+ 
+    function triggerSnowEffect() {
+        if (state.lines.length === 0) { state.isSnowing = true; return; }
+        state.lines.forEach(line => {
+            for (let i = 0; i < line.points.length; i += 3) {
+                const p = line.points[i];
+                state.particles.push({
+                    x: p.x, y: p.y,
+                    vx: (Math.random() - 0.5) * 4,
+                    vy: Math.random() * 2 + 2,
+                    color: line.isEraser ? null : line.color,
+                    size: Math.random() * line.width + 1,
+                    alpha: 1.0
+                });
+            }
+        });
+        state.lines = [];
+        state.isSnowing = true;
+    }
+ 
+    function updateParticles() {
+        drawCtx.globalCompositeOperation = 'source-over';
+        for (let i = state.particles.length - 1; i >= 0; i--) {
+            const p = state.particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.vx += (Math.random() - 0.5) * 0.2;
+            p.alpha -= 0.02;
+            if (p.color && p.alpha > 0) {
+                drawCtx.beginPath();
+                drawCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                drawCtx.fillStyle = p.color;
+                drawCtx.globalAlpha = p.alpha;
+                drawCtx.fill();
+            }
+            if (p.alpha <= 0 || p.y > CONFIG.height) state.particles.splice(i, 1);
+        }
+        drawCtx.globalAlpha = 1.0;
+        if (state.particles.length === 0) state.isSnowing = false;
+    }
+ 
+    // --- 启动 ---
+ 
+    const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({
+        maxNumHands: 1, 
+        modelComplexity: 1,
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.7
+    });
+    hands.onResults(onResults);
+ 
+    const camera = new Camera(videoElement, {
+        onFrame: async () => { await hands.send({image: videoElement}); },
+        width: 1280, height: 720
+    });
+    camera.start();
+ 
+</script>
+</body>
+</html>
